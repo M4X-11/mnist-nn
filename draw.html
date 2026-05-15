@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Draw Digit (MNIST-ready)</title>
+    <style>
+        body {
+            font-family: Arial;
+            text-align: center;
+        }
+        canvas {
+            border: 2px solid black;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Draw a digit</h2>
+
+<canvas id="canvas" width="280" height="280"></canvas><br><br>
+
+<button onclick="clearCanvas()">Clear</button>
+<button onclick="getImage()">Get 28x28 Data</button>
+
+<pre id="output"></pre>
+
+<script>
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+// black background
+ctx.fillStyle = "black";
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+let drawing = false;
+let lastX = 0;
+let lastY = 0;
+
+// EVENTS
+canvas.addEventListener("mousedown", (e) => {
+    drawing = true;
+    const rect = canvas.getBoundingClientRect();
+    lastX = e.clientX - rect.left;
+    lastY = e.clientY - rect.top;
+});
+
+canvas.addEventListener("mouseup", () => drawing = false);
+canvas.addEventListener("mouseleave", () => drawing = false);
+
+canvas.addEventListener("mousemove", (e) => {
+    if (!drawing) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    drawLine(lastX, lastY, x, y);
+
+    lastX = x;
+    lastY = y;
+});
+
+// smooth continuous drawing
+function drawLine(x0, y0, x1, y1) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const steps = Math.max(Math.abs(dx), Math.abs(dy));
+
+    for (let i = 0; i <= steps; i++) {
+        const x = x0 + (dx * i) / steps;
+        const y = y0 + (dy * i) / steps;
+
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function clearCanvas() {
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+// MNIST-style blur
+function blurImage(input) {
+    let output = new Array(784).fill(0);
+
+    const kernel = [
+        [1,2,1],
+        [2,4,2],
+        [1,2,1]
+    ];
+
+    for (let y = 1; y < 27; y++) {
+        for (let x = 1; x < 27; x++) {
+            let sum = 0;
+            let weight = 0;
+
+            for (let ky = -1; ky <= 1; ky++) {
+                for (let kx = -1; kx <= 1; kx++) {
+                    let val = input[(y + ky) * 28 + (x + kx)];
+                    let w = kernel[ky + 1][kx + 1];
+
+                    sum += val * w;
+                    weight += w;
+                }
+            }
+
+            output[y * 28 + x] = sum / weight;
+        }
+    }
+
+    return output;
+}
+
+function getImage() {
+    const smallCanvas = document.createElement("canvas");
+    smallCanvas.width = 28;
+    smallCanvas.height = 28;
+    const smallCtx = smallCanvas.getContext("2d");
+
+    smallCtx.imageSmoothingEnabled = false;
+    smallCtx.drawImage(canvas, 0, 0, 28, 28);
+
+    const imgData = smallCtx.getImageData(0, 0, 28, 28).data;
+
+    let pixels = [];
+
+    // grayscale (no threshold)
+    for (let i = 0; i < imgData.length; i += 4) {
+        pixels.push(imgData[i] / 255);
+    }
+
+    // convert to 2D
+    let grid = [];
+    for (let i = 0; i < 28; i++) {
+        grid.push(pixels.slice(i * 28, (i + 1) * 28));
+    }
+
+    // bounding box
+    let minX = 27, maxX = 0, minY = 27, maxY = 0;
+
+    for (let y = 0; y < 28; y++) {
+        for (let x = 0; x < 28; x++) {
+            if (grid[y][x] > 0.05) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+
+    let result = new Array(784).fill(0);
+
+    let width = maxX - minX + 1;
+    let height = maxY - minY + 1;
+
+    let scale = Math.min(20 / width, 20 / height);
+
+    let newW = Math.floor(width * scale);
+    let newH = Math.floor(height * scale);
+
+    let offsetX = Math.floor((28 - newW) / 2);
+    let offsetY = Math.floor((28 - newH) / 2);
+
+    // resize with aspect ratio
+    for (let y = 0; y < newH; y++) {
+        for (let x = 0; x < newW; x++) {
+            let srcX = Math.floor(x / scale);
+            let srcY = Math.floor(y / scale);
+
+            let value = grid[minY + srcY][minX + srcX];
+
+            let newIndex = (y + offsetY) * 28 + (x + offsetX);
+            result[newIndex] = value;
+        }
+    }
+
+    // blur (MNIST-like)
+    result = blurImage(result);
+
+    // center of mass
+    let sum = 0, cx = 0, cy = 0;
+
+    for (let y = 0; y < 28; y++) {
+        for (let x = 0; x < 28; x++) {
+            let v = result[y * 28 + x];
+            sum += v;
+            cx += x * v;
+            cy += y * v;
+        }
+    }
+
+    if (sum > 0) {
+        cx /= sum;
+        cy /= sum;
+    }
+
+    let shiftX = Math.round(14 - cx);
+    let shiftY = Math.round(14 - cy);
+
+    let centered = new Array(784).fill(0);
+
+    for (let y = 0; y < 28; y++) {
+        for (let x = 0; x < 28; x++) {
+            let newX = x + shiftX;
+            let newY = y + shiftY;
+
+            if (newX >= 0 && newX < 28 && newY >= 0 && newY < 28) {
+                centered[newY * 28 + newX] = result[y * 28 + x];
+            }
+        }
+    }
+
+    document.getElementById("output").textContent =
+        JSON.stringify(centered);
+}
+</script>
+
+</body>
+</html>
